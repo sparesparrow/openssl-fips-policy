@@ -11,6 +11,10 @@ conan install --requires=openssl-fips-data/140-3.1 -r=sparesparrow-conan
 
 ## Architecture
 
+Schemas
+------
+This repository reserves `fips-140-3/schemas/` for future JSON schema validation of certificate and vector formats.
+
 ```mermaid
 graph LR
   A[Certificate 4985] --> D[FIPS Data Package]
