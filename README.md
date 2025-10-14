@@ -5,8 +5,8 @@ FIPS 140-3 policy definitions and compliance artifacts.
 ## Usage
 
 ```bash
-conan remote add sparesparrow-conan https://conan.cloudsmith.io/sparesparrow-conan/openssl-conan/ --force
-conan install --requires=openssl-fips-data/140-3.1 -r=sparesparrow-conan
+conan remote add ${CONAN_REPOSITORY_NAME} ${CONAN_REPOSITORY_URL} --force
+conan install --requires=openssl-fips-data/140-3.1 -r=${CONAN_REPOSITORY_NAME}
 ```
 
 ## Architecture
