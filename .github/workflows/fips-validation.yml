@@ -96,57 +96,135 @@ jobs:
                     EXPECTED_HASH="unknown"
                   fi
 
-                  # Calculate actual hash
-                  FIPS_MODULE_PATH="/usr/local/openssl-fips/lib/ossl-modules/fips.so"
-                  if [ -f "$FIPS_MODULE_PATH" ]; then
-                    ACTUAL_HASH=$(openssl dgst -sha256 "$FIPS_MODULE_PATH" | cut -d' ' -f2)
-                    echo "Actual FIPS module hash: $ACTUAL_HASH"
-                    
-                    if [ "$EXPECTED_HASH" != "unknown" ] && [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
-                      echo "❌ FIPS module hash mismatch!"
-                      echo "Expected: $EXPECTED_HASH"
-                      echo "Actual: $ACTUAL_HASH"
-                      exit 1
-                    else
-                      echo "✅ FIPS module hash validated"
+                  # Find FIPS module in common locations
+                  FIPS_MODULE_PATH=""
+                  POSSIBLE_PATHS=(
+                    "/usr/local/openssl-fips/lib/ossl-modules/fips.so"
+                    "/usr/local/lib/ossl-modules/fips.so"
+                    "/usr/lib/ossl-modules/fips.so"
+                    "/usr/local/ssl/lib/ossl-modules/fips.so"
+                    "/opt/openssl/lib/ossl-modules/fips.so"
+                  )
+                  
+                  for path in "${POSSIBLE_PATHS[@]}"; do
+                    if [ -f "$path" ]; then
+                      FIPS_MODULE_PATH="$path"
+                      echo "✅ Found FIPS module at: $FIPS_MODULE_PATH"
+                      break
                     fi
-                  else
-                    echo "❌ FIPS module not found at $FIPS_MODULE_PATH"
+                  done
+                  
+                  if [ -z "$FIPS_MODULE_PATH" ]; then
+                    echo "❌ FIPS module not found in any expected location"
+                    echo "Searched paths:"
+                    for path in "${POSSIBLE_PATHS[@]}"; do
+                      echo "  - $path"
+                    done
+                    echo ""
+                    echo "Available OpenSSL modules:"
+                    find /usr -name "*.so" -path "*/ossl-modules/*" 2>/dev/null || echo "  No modules found"
                     exit 1
+                  fi
+
+                  # Calculate actual hash
+                  ACTUAL_HASH=$(openssl dgst -sha256 "$FIPS_MODULE_PATH" | cut -d' ' -f2)
+                  echo "Actual FIPS module hash: $ACTUAL_HASH"
+                  
+                  if [ "$EXPECTED_HASH" != "unknown" ] && [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+                    echo "❌ FIPS module hash mismatch!"
+                    echo "Expected: $EXPECTED_HASH"
+                    echo "Actual: $ACTUAL_HASH"
+                    exit 1
+                  else
+                    echo "✅ FIPS module hash validated"
                   fi
 
             - name: Run FIPS self-tests
               run: |
-                  export OPENSSL_CONF=/usr/local/openssl-fips/ssl/openssl.cnf
-                  export OPENSSL_MODULES=/usr/local/openssl-fips/lib/ossl-modules
-                  export LD_LIBRARY_PATH=/usr/local/openssl-fips/lib:$LD_LIBRARY_PATH
+                  # Find OpenSSL installation directory
+                  OPENSSL_PREFIX=""
+                  POSSIBLE_PREFIXES=(
+                    "/usr/local/openssl-fips"
+                    "/usr/local"
+                    "/usr"
+                    "/usr/local/ssl"
+                    "/opt/openssl"
+                  )
+                  
+                  for prefix in "${POSSIBLE_PREFIXES[@]}"; do
+                    if [ -f "$prefix/bin/openssl" ]; then
+                      OPENSSL_PREFIX="$prefix"
+                      echo "✅ Found OpenSSL at: $OPENSSL_PREFIX"
+                      break
+                    fi
+                  done
+                  
+                  if [ -z "$OPENSSL_PREFIX" ]; then
+                    echo "❌ OpenSSL binary not found"
+                    exit 1
+                  fi
+
+                  # Set environment variables
+                  export OPENSSL_CONF="$OPENSSL_PREFIX/ssl/openssl.cnf"
+                  export OPENSSL_MODULES="$OPENSSL_PREFIX/lib/ossl-modules"
+                  export LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib:$LD_LIBRARY_PATH"
+                  export PATH="$OPENSSL_PREFIX/bin:$PATH"
+
+                  echo "OpenSSL configuration:"
+                  echo "  OPENSSL_CONF: $OPENSSL_CONF"
+                  echo "  OPENSSL_MODULES: $OPENSSL_MODULES"
+                  echo "  LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
                   # Run FIPS self-test
-                  /usr/local/openssl-fips/bin/openssl fips-selftest
+                  openssl fips-selftest
 
                   # Verify FIPS provider is available
-                  /usr/local/openssl-fips/bin/openssl list -providers -verbose | grep -i fips
+                  openssl list -providers -verbose | grep -i fips
 
             - name: Test FIPS algorithms
               run: |
-                  export OPENSSL_CONF=/usr/local/openssl-fips/ssl/openssl.cnf
-                  export OPENSSL_MODULES=/usr/local/openssl-fips/lib/ossl-modules
-                  export LD_LIBRARY_PATH=/usr/local/openssl-fips/lib:$LD_LIBRARY_PATH
+                  # Find OpenSSL installation directory (reuse from previous step)
+                  OPENSSL_PREFIX=""
+                  POSSIBLE_PREFIXES=(
+                    "/usr/local/openssl-fips"
+                    "/usr/local"
+                    "/usr"
+                    "/usr/local/ssl"
+                    "/opt/openssl"
+                  )
+                  
+                  for prefix in "${POSSIBLE_PREFIXES[@]}"; do
+                    if [ -f "$prefix/bin/openssl" ]; then
+                      OPENSSL_PREFIX="$prefix"
+                      break
+                    fi
+                  done
+                  
+                  if [ -z "$OPENSSL_PREFIX" ]; then
+                    echo "❌ OpenSSL binary not found"
+                    exit 1
+                  fi
+
+                  # Set environment variables
+                  export OPENSSL_CONF="$OPENSSL_PREFIX/ssl/openssl.cnf"
+                  export OPENSSL_MODULES="$OPENSSL_PREFIX/lib/ossl-modules"
+                  export LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib:$LD_LIBRARY_PATH"
+                  export PATH="$OPENSSL_PREFIX/bin:$PATH"
 
                   # Test FIPS-approved algorithms
                   echo "Testing FIPS-approved algorithms..."
 
                   # AES-GCM encryption
                   echo "Testing AES-GCM..."
-                  echo "Hello FIPS World" | /usr/local/openssl-fips/bin/openssl enc -aes-256-gcm -provider fips -pbkdf2 -pass pass:testpass -base64
+                  echo "Hello FIPS World" | openssl enc -aes-256-gcm -provider fips -pbkdf2 -pass pass:testpass -base64
 
                   # SHA-256 hash
                   echo "Testing SHA-256..."
-                  echo "Hello FIPS World" | /usr/local/openssl-fips/bin/openssl dgst -sha256 -provider fips
+                  echo "Hello FIPS World" | openssl dgst -sha256 -provider fips
 
                   # RSA key generation
                   echo "Testing RSA key generation..."
-                  /usr/local/openssl-fips/bin/openssl genpkey -algorithm RSA -provider fips -pkeyopt rsa_keygen_bits:2048 -out /tmp/test_rsa_key.pem
+                  openssl genpkey -algorithm RSA -provider fips -pkeyopt rsa_keygen_bits:2048 -out /tmp/test_rsa_key.pem
 
                   echo "✅ FIPS algorithm tests completed"
 
@@ -169,7 +247,7 @@ jobs:
 
                   ## Module Details
                   \`\`\`
-                  $(/usr/local/openssl-fips/bin/openssl list -providers -verbose | grep -A 20 fips)
+                  $(openssl list -providers -verbose | grep -A 20 fips)
                   \`\`\`
 
                   ## Certificate Information
