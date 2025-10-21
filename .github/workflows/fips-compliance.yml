@@ -1,0 +1,144 @@
+name: FIPS 140-3 Compliance Validation
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "fips/**"
+            - "certificates/**"
+            - ".github/workflows/fips-compliance.yml"
+    pull_request:
+        branches: [main]
+    schedule:
+        - cron: "0 10 * * *" # Daily at 10 AM
+
+jobs:
+    validate-certificates:
+        runs-on: ubuntu-22.04
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Validate certificate files
+              run: |
+                  echo "Validating FIPS certificates..."
+
+                  # Check certificate directory structure
+                  test -d certificates/ || (echo "Missing certificates/" && exit 1)
+                  test -f certificates/certificate-4985.pdf || echo "Warning: Missing certificate #4985"
+
+                  # Validate hash files
+                  if [ -f fips/expected_module_hash.txt ]; then
+                    HASH=$(cat fips/expected_module_hash.txt)
+                    if [ ${#HASH} -ne 64 ]; then
+                      echo "Error: Invalid hash length in expected_module_hash.txt"
+                      exit 1
+                    fi
+                    echo "✓ Expected hash validated: $HASH"
+                  fi
+
+            - name: Check FIPS configuration files
+              run: |
+                  # Validate fips.cnf if present
+                  if [ -f fips/fips.cnf ]; then
+                    echo "✓ FIPS configuration found"
+                    
+                    # Basic syntax check
+                    openssl version >/dev/null 2>&1 || sudo apt-get install -y openssl
+                    
+                    # Check configuration syntax
+                    OPENSSL_CONF=fips/fips.cnf openssl version || echo "Warning: FIPS config may have issues"
+                  fi
+
+    fips-integration-test:
+        uses: sparesparrow/openssl-tools/.github/workflows/reusable-fips-validation.yml@v1
+        with:
+            openssl-version: "3.6.0"
+            fips-module-version: "3.0.9"
+            expected-hash: ${{ vars.FIPS_MODULE_HASH }}
+
+    compliance-report:
+        needs: [validate-certificates, fips-integration-test]
+        runs-on: ubuntu-22.04
+        if: always()
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Generate compliance summary
+              run: |
+                  mkdir -p reports
+
+                  cat > reports/compliance-summary-$(date +%Y%m%d).md << EOF
+                  # FIPS 140-3 Compliance Summary
+
+                  **Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+                  **Repository**: sparesparrow/openssl-fips-policy
+                  **Commit**: $GITHUB_SHA
+
+                  ## Validation Results
+
+                  | Test | Status | Notes |
+                  |------|--------|-------|
+                  | Certificate Validation | ${{ needs.validate-certificates.result }} | Certificate files checked |
+                  | FIPS Integration Test | ${{ needs.fips-integration-test.result }} | Full FIPS validation |
+
+                  ## Certificate Status
+
+                  - **Certificate #4985**: $([ -f certificates/certificate-4985.pdf ] && echo "Present" || echo "Missing")
+                  - **Expected Hash**: $([ -f fips/expected_module_hash.txt ] && cat fips/expected_module_hash.txt || echo "Not configured")
+
+                  ## Next Actions
+
+                  $(if [ "${{ needs.fips-integration-test.result }}" != "success" ]; then
+                    echo "- [ ] Investigate FIPS integration test failures"
+                    echo "- [ ] Verify module hash configuration"
+                    echo "- [ ] Check OpenSSL build configuration"
+                  else
+                    echo "- [x] All FIPS validations passed"
+                    echo "- [x] Ready for production use"
+                  fi)
+
+                  ## Related Links
+
+                  - [NIST CMVP](https://csrc.nist.gov/projects/cryptographic-module-validation-program)
+                  - [OpenSSL FIPS](https://www.openssl.org/docs/fips.html)
+                  - [Validation History](${{ github.repository }}/actions/workflows/fips-compliance.yml)
+                  EOF
+
+            - name: Upload compliance report
+              uses: actions/upload-artifact@v4
+              with:
+                  name: fips-compliance-report
+                  path: reports/
+                  retention-days: 365
+
+            - name: Update repository status
+              run: |
+                  if [ "${{ needs.fips-integration-test.result }}" = "success" ]; then
+                    echo "FIPS_COMPLIANCE=VALID" >> $GITHUB_ENV
+                  else
+                    echo "FIPS_COMPLIANCE=INVALID" >> $GITHUB_ENV
+                  fi
+
+    security-scan:
+        runs-on: ubuntu-22.04
+        permissions:
+            security-events: write
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Run Trivy security scan
+              uses: aquasecurity/trivy-action@master
+              with:
+                  scan-type: "fs"
+                  scan-ref: "."
+                  format: "sarif"
+                  output: "trivy-results.sarif"
+
+            - name: Upload Trivy results
+              uses: github/codeql-action/upload-sarif@v3
+              if: always()
+              with:
+                  sarif_file: "trivy-results.sarif"
+
