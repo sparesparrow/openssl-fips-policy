@@ -1,0 +1,1 @@
+. "/home/sparrow/projects/openssl-devenv/openssl-fips-policy/deactivate_conanrunenv.sh"
