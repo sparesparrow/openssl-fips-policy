@@ -310,8 +310,41 @@ generate_sbom_and_security_scan() {
         # Extract CMVP certificate number
         CERT_NUMBER=$(jq -r '.packages[] | select(.name | contains("openssl")) | .version' openssl-fips-sbom.spdx.json | head -1)
         log_success "Extracted certificate info from SBOM: $CERT_NUMBER"
+        
+        # Verify FIPS module is included in SBOM
+        if grep -q -i "fips" openssl-fips-sbom.spdx.json; then
+            log_success "FIPS module detected in SBOM"
+        else
+            log_error "FIPS module not found in SBOM"
+            return 1
+        fi
+        
+        # Include policy artifacts in SBOM
+        if [ -d "fips-140-3" ] && [ -f "fips-140-3/certificates/certificate-4985.json" ]; then
+            log_info "Including FIPS policy artifacts in SBOM..."
+            syft packages fips-140-3/ -o spdx-json > fips-policy-artifacts-sbom.spdx.json
+            
+            if [ -f "fips-policy-artifacts-sbom.spdx.json" ]; then
+                log_success "Policy artifacts included in SBOM"
+                
+                # Verify certificate #4985 is in policy artifacts
+                if grep -q "4985" fips-policy-artifacts-sbom.spdx.json; then
+                    log_success "Certificate #4985 found in policy artifacts SBOM"
+                else
+                    log_error "Certificate #4985 not found in policy artifacts SBOM"
+                    return 1
+                fi
+            else
+                log_error "Failed to include policy artifacts in SBOM"
+                return 1
+            fi
+        else
+            log_error "FIPS policy artifacts not found - required for compliance"
+            return 1
+        fi
     else
-        log_warning "syft not available - skipping SBOM generation"
+        log_error "syft not available - SBOM generation required for FIPS compliance"
+        return 1
     fi
 
     # Run security scan with trivy
@@ -370,6 +403,8 @@ main() {
     log_success "Self-tests passed on all platforms"
     log_success "No config file reuse between runners"
     log_success "All approved algorithms available, restricted algorithms properly blocked"
+    log_success "SBOM includes policy artifacts and certificate #4985"
+    log_success "FIPS module properly included in SBOM"
 
     # Cleanup
     rm -f testfile.txt test_deprecated*
